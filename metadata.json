@@ -1,0 +1,7 @@
+{
+  "name": "LingoTutor",
+  "description": "An AI-powered English tutor with chat, speech-to-text, roleplay scenarios, and live audio conversations.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
