@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { transcribeAudio, checkGrammar, createChatSession, getNewRoleplays } from './lib/gemini';
-import { STTRecorder } from './lib/audioUtils';
-import { Mic, Send, CheckCircle, Square, Briefcase, Coffee, Stethoscope, Loader2, Sparkles, Plane, Hotel, Users, MapPin, BookOpen, RefreshCw, ChevronDown, ChevronRight, Sun, Moon, Monitor } from 'lucide-react';
+import { transcribeAudio, checkGrammar, createChatSession, getNewRoleplays, getSuggestedResponses, generateSpeech } from './lib/gemini';
+import { STTRecorder, playTTSAudio } from './lib/audioUtils';
+import { Mic, Send, CheckCircle, Square, Briefcase, Coffee, Stethoscope, Loader2, Sparkles, Plane, Hotel, Users, MapPin, BookOpen, RefreshCw, ChevronDown, ChevronRight, Sun, Moon, Monitor, MessageSquareX, Lightbulb, Volume2, MessageSquare } from 'lucide-react';
 import Markdown from 'react-markdown';
-import LiveTutorModal from './components/LiveTutorModal';
-import StudySheet from './components/StudySheet';
+import StudyHub from './components/StudyHub';
 import { useTheme } from './hooks/useTheme';
 
 interface Message {
@@ -36,8 +35,8 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [liveScenario, setLiveScenario] = useState<string | null>(null);
-  const [isStudySheetOpen, setIsStudySheetOpen] = useState(false);
+  const [currentMode, setCurrentMode] = useState<string>('General Chat');
+  const [activeView, setActiveView] = useState<'chat' | 'study'>('chat');
   const [dynamicRoleplays, setDynamicRoleplays] = useState<Roleplay[]>([]);
   const [isGeneratingRoleplays, setIsGeneratingRoleplays] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({
@@ -46,29 +45,100 @@ export default function App() {
     'Travel': false,
     'Socializing': false
   });
+  const [suggestedResponses, setSuggestedResponses] = useState<string[]>([]);
+  const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
+  const [playingId, setPlayingId] = useState<string | null>(null);
   
   const { theme, setTheme } = useTheme();
   
   const chatRef = useRef<any>(null);
   const sttRecorderRef = useRef<STTRecorder | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    // Initialize chat session
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+    }
+  }, [input]);
+
+  const resetChat = () => {
     const systemInstruction = "You are a patient, encouraging English tutor. Respond naturally to keep the conversation going. If I make a grammar mistake, highlight it in bold and explain why it was wrong in simple terms. Suggest one 'Level Up' word in every response (a more advanced synonym for a word I used). Keep your language level at B2 (Upper Intermediate) unless I ask to go higher.";
     chatRef.current = createChatSession(systemInstruction);
-    
-    // Initial greeting
+    setCurrentMode('General Chat');
+    setSuggestedResponses([]);
     setMessages([{
       id: Date.now().toString(),
       role: 'model',
       text: "Hello! I'm your English tutor. How can I help you practice today? We can chat here, or you can try a Live Roleplay from the menu!"
     }]);
+  };
+
+  const handlePlayAudio = async (id: string, text: string) => {
+    if (playingId) return;
+    setPlayingId(id);
+    try {
+      const audioBase64 = await generateSpeech(text);
+      if (audioBase64) {
+        await playTTSAudio(audioBase64);
+      }
+    } catch (e) {
+      console.error("TTS Error:", e);
+    } finally {
+      setPlayingId(null);
+    }
+  };
+
+  useEffect(() => {
+    resetChat();
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    
+    // Generate suggested responses if in roleplay mode and last message is from model
+    const generateSuggestions = async () => {
+      if (messages.length === 0) return;
+      const lastMessage = messages[messages.length - 1];
+      
+      if (currentMode.startsWith('Roleplay: ') && lastMessage.role === 'model') {
+        const scenario = currentMode.replace('Roleplay: ', '');
+        setIsGeneratingSuggestions(true);
+        setSuggestedResponses([]);
+        try {
+          const suggestions = await getSuggestedResponses(lastMessage.text, scenario);
+          setSuggestedResponses(suggestions);
+        } catch (error) {
+          console.error("Failed to generate suggestions:", error);
+        } finally {
+          setIsGeneratingSuggestions(false);
+        }
+      } else {
+        setSuggestedResponses([]);
+      }
+    };
+
+    generateSuggestions();
+  }, [messages, currentMode]);
+
+  const handleRefreshSuggestions = async () => {
+    if (messages.length === 0) return;
+    const lastMessage = messages[messages.length - 1];
+    
+    if (currentMode.startsWith('Roleplay: ') && lastMessage.role === 'model') {
+      const scenario = currentMode.replace('Roleplay: ', '');
+      setIsGeneratingSuggestions(true);
+      try {
+        const suggestions = await getSuggestedResponses(lastMessage.text, scenario, true);
+        setSuggestedResponses(suggestions);
+      } catch (error) {
+        console.error("Failed to generate suggestions:", error);
+      } finally {
+        setIsGeneratingSuggestions(false);
+      }
+    }
+  };
 
   const handleSend = async (text: string = input) => {
     if (!text.trim() || !chatRef.current) return;
@@ -127,10 +197,38 @@ export default function App() {
     }
   };
 
+  const startRoleplay = async (scenario: string) => {
+    const systemInstruction = `You are a patient, encouraging English tutor. We are doing a roleplay: ${scenario}. You start the conversation. Respond naturally to keep the conversation going. If I make a grammar mistake, highlight it in bold and explain why it was wrong in simple terms. Suggest one 'Level Up' word in every response (a more advanced synonym for a word I used). Keep your language level at B2 (Upper Intermediate) unless I ask to go higher.`;
+    
+    chatRef.current = createChatSession(systemInstruction);
+    setCurrentMode(`Roleplay: ${scenario}`);
+    setSuggestedResponses([]);
+    setMessages([]);
+    setIsTyping(true);
+    
+    try {
+      const response = await chatRef.current.sendMessage({ message: "Let's start the roleplay. You go first." });
+      setMessages([{
+        id: Date.now().toString(),
+        role: 'model',
+        text: response.text
+      }]);
+    } catch (error) {
+      console.error("Chat error:", error);
+      setMessages([{
+        id: Date.now().toString(),
+        role: 'model',
+        text: "Sorry, I couldn't start the roleplay right now. Please try again."
+      }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   const handleGenerateRoleplays = async () => {
     setIsGeneratingRoleplays(true);
     try {
-      const newRoleplays = await getNewRoleplays();
+      const newRoleplays = await getNewRoleplays(true);
       setDynamicRoleplays(prev => [...prev, ...newRoleplays]);
       
       // Auto-expand newly generated categories
@@ -169,16 +267,29 @@ export default function App() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">LingoTutor</h1>
         </div>
 
-        <div className="mb-8 shrink-0">
+        <div className="mb-8 shrink-0 space-y-3">
           <button 
-            onClick={() => setIsStudySheetOpen(true)}
-            className="w-full bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 border border-indigo-100 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300 rounded-xl p-4 flex items-center justify-between transition-colors shadow-sm"
+            onClick={() => setActiveView('chat')}
+            className={`w-full ${activeView === 'chat' ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300' : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'} border rounded-xl p-4 flex items-center justify-between transition-colors shadow-sm`}
+          >
+            <div className="flex items-center">
+              <MessageSquare className="w-5 h-5 mr-3" />
+              <div className="text-left">
+                <h3 className="font-bold text-sm">Live Tutor</h3>
+                <p className="text-xs opacity-80">Practice speaking</p>
+              </div>
+            </div>
+          </button>
+
+          <button 
+            onClick={() => setActiveView('study')}
+            className={`w-full ${activeView === 'study' ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300' : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/50'} border rounded-xl p-4 flex items-center justify-between transition-colors shadow-sm`}
           >
             <div className="flex items-center">
               <BookOpen className="w-5 h-5 mr-3" />
               <div className="text-left">
-                <h3 className="font-bold text-sm">Study Materials</h3>
-                <p className="text-xs text-indigo-500/80 dark:text-indigo-400/80">Idioms, Sentences & Grammar</p>
+                <h3 className="font-bold text-sm">Study Hub</h3>
+                <p className="text-xs opacity-80">Grammar, Idioms & Quizzes</p>
               </div>
             </div>
             <div className="bg-white dark:bg-indigo-900/50 p-1.5 rounded-lg shadow-sm">
@@ -202,7 +313,7 @@ export default function App() {
                 {expandedCategories[category] && (
                   <div className="mt-1 space-y-2 pl-1 animate-in slide-in-from-top-2 duration-200">
                     {roleplays.map((rp, idx) => (
-                      <button key={`${category}-${idx}`} onClick={() => setLiveScenario(rp.title)} className="w-full flex items-center space-x-3 p-2.5 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-100 dark:border-gray-700 transition-colors text-left shadow-sm bg-white dark:bg-gray-800">
+                      <button key={`${category}-${idx}`} onClick={() => startRoleplay(rp.title)} className="w-full flex items-center space-x-3 p-2.5 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-100 dark:border-gray-700 transition-colors text-left shadow-sm bg-white dark:bg-gray-800">
                         <div className="bg-indigo-50 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 p-1.5 rounded-lg w-8 h-8 flex items-center justify-center text-base shrink-0">{rp.emoji}</div>
                         <span className="font-medium text-gray-700 dark:text-gray-200 text-sm">{rp.title}</span>
                       </button>
@@ -232,8 +343,29 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col h-screen max-h-screen">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col h-screen max-h-screen relative">
+        <div className={activeView === 'study' ? 'flex-1 flex flex-col h-full' : 'hidden'}>
+          <StudyHub />
+        </div>
+        <div className={activeView === 'chat' ? 'flex-1 flex flex-col h-full' : 'hidden'}>
+          {/* Header Bar */}
+          <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between shrink-0 z-10">
+          <div className="flex items-center space-x-2">
+            <div className={`w-2 h-2 rounded-full ${currentMode === 'General Chat' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`}></div>
+            <span className="font-medium text-gray-700 dark:text-gray-200">{currentMode}</span>
+          </div>
+          {currentMode !== 'General Chat' && (
+            <button 
+              onClick={resetChat}
+              className="flex items-center space-x-1 text-sm text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 transition-colors bg-gray-100 hover:bg-red-50 dark:bg-gray-700 dark:hover:bg-red-900/30 px-3 py-1.5 rounded-lg"
+            >
+              <MessageSquareX className="w-4 h-4" />
+              <span>End Roleplay</span>
+            </button>
+          )}
+        </div>
+
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
           {messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -245,6 +377,19 @@ export default function App() {
                     <p>{msg.text}</p>
                   )}
                 </div>
+                
+                {msg.role === 'model' && (
+                  <div className="mt-3 flex justify-start">
+                    <button
+                      onClick={() => handlePlayAudio(msg.id, msg.text)}
+                      disabled={playingId === msg.id}
+                      className="flex items-center space-x-1 text-xs text-gray-500 hover:text-indigo-600 dark:text-gray-400 dark:hover:text-indigo-400 transition-colors disabled:opacity-50"
+                    >
+                      {playingId === msg.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5" />}
+                      <span>{playingId === msg.id ? 'Playing...' : 'Play Audio'}</span>
+                    </button>
+                  </div>
+                )}
                 
                 {msg.role === 'user' && (
                   <div className="mt-3 flex justify-end">
@@ -281,8 +426,44 @@ export default function App() {
         </div>
 
         {/* Input Area */}
-        <div className="p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 transition-colors duration-200">
-          <div className="max-w-4xl mx-auto flex items-end space-x-2">
+        <div className="p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 transition-colors duration-200 flex flex-col">
+          {/* Suggested Responses */}
+          {(suggestedResponses.length > 0 || isGeneratingSuggestions) && (
+            <div className="max-w-4xl mx-auto w-full mb-3 flex flex-wrap gap-2 items-center">
+              {isGeneratingSuggestions ? (
+                <div className="flex items-center text-xs text-gray-500 dark:text-gray-400 space-x-1.5 px-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Thinking of ideas...</span>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center text-xs font-medium text-amber-600 dark:text-amber-500 mr-1">
+                    <Lightbulb className="w-3.5 h-3.5 mr-1" />
+                    <span>Ideas:</span>
+                  </div>
+                  {suggestedResponses.map((suggestion, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setInput(suggestion)}
+                      className="text-xs bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/20 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50 px-3 py-1.5 rounded-full transition-colors text-left max-w-xs truncate"
+                      title={suggestion}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                  <button
+                    onClick={handleRefreshSuggestions}
+                    className="p-1.5 rounded-full bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/40 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-400 transition-colors"
+                    title="Get new suggestions"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="max-w-4xl mx-auto w-full flex items-end space-x-2">
             <button
               onClick={toggleRecording}
               className={`p-3 rounded-xl flex-shrink-0 transition-colors shadow-sm ${isRecording ? 'bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400 animate-pulse' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
@@ -291,14 +472,21 @@ export default function App() {
               {isRecording ? <Square className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
             </button>
             <div className="flex-1 bg-gray-100 dark:bg-gray-700 rounded-xl flex items-center px-4 py-2 focus-within:ring-2 focus-within:ring-indigo-500 focus-within:bg-white dark:focus-within:bg-gray-800 transition-all shadow-sm">
-              <input
-                type="text"
+              <textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
                 placeholder={isRecording ? "Listening..." : "Type a message or use the microphone..."}
-                className="w-full bg-transparent border-none focus:outline-none py-2 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
+                className="w-full bg-transparent border-none focus:outline-none py-2 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 resize-none custom-scrollbar"
                 disabled={isRecording}
+                rows={1}
+                style={{ minHeight: '40px', maxHeight: '150px' }}
               />
             </div>
             <button
@@ -310,13 +498,8 @@ export default function App() {
             </button>
           </div>
         </div>
+        </div>
       </div>
-
-      {liveScenario && (
-        <LiveTutorModal scenario={liveScenario} onClose={() => setLiveScenario(null)} />
-      )}
-      
-      <StudySheet isOpen={isStudySheetOpen} onClose={() => setIsStudySheetOpen(false)} />
     </div>
   );
 }
