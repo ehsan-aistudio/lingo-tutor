@@ -125,3 +125,32 @@ export class LiveAudioPlayer {
     this.nextTime = 0;
   }
 }
+
+export const playTTSAudio = async (base64: string): Promise<void> => {
+  const context = new AudioContext({ sampleRate: 24000 });
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const pcm16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(pcm16.length);
+  for (let i = 0; i < pcm16.length; i++) {
+    float32[i] = pcm16[i] / 32768;
+  }
+
+  const buffer = context.createBuffer(1, float32.length, 24000);
+  buffer.getChannelData(0).set(float32);
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.connect(context.destination);
+  source.start(0);
+
+  return new Promise((resolve) => {
+    source.onended = () => {
+      context.close();
+      resolve();
+    };
+  });
+};

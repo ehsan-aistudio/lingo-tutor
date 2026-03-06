@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, RefreshCw, BookOpen, MessageSquare, Loader2, PenTool } from 'lucide-react';
-import { getUsefulIdioms, getUsefulSentences, getUsefulGrammar } from '../lib/gemini';
+import { X, RefreshCw, BookOpen, MessageSquare, Loader2, PenTool, Volume2 } from 'lucide-react';
+import { getUsefulIdioms, getUsefulSentences, getUsefulGrammar, generateSpeech } from '../lib/gemini';
+import { playTTSAudio } from '../lib/audioUtils';
 
 interface StudySheetProps {
   isOpen: boolean;
@@ -15,6 +16,7 @@ export default function StudySheet({ isOpen, onClose }: StudySheetProps) {
   const [isLoadingIdioms, setIsLoadingIdioms] = useState(false);
   const [isLoadingSentences, setIsLoadingSentences] = useState(false);
   const [isLoadingGrammars, setIsLoadingGrammars] = useState(false);
+  const [playingId, setPlayingId] = useState<string | null>(null);
 
   const fetchIdioms = async () => {
     setIsLoadingIdioms(true);
@@ -57,6 +59,21 @@ export default function StudySheet({ isOpen, onClose }: StudySheetProps) {
     if (isOpen && sentences.length === 0) fetchSentences();
     if (isOpen && grammars.length === 0) fetchGrammars();
   }, [isOpen]);
+
+  const handlePlayAudio = async (id: string, text: string) => {
+    if (playingId) return;
+    setPlayingId(id);
+    try {
+      const audioBase64 = await generateSpeech(text);
+      if (audioBase64) {
+        await playTTSAudio(audioBase64);
+      }
+    } catch (e) {
+      console.error("TTS Error:", e);
+    } finally {
+      setPlayingId(null);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -112,8 +129,17 @@ export default function StudySheet({ isOpen, onClose }: StudySheetProps) {
                 <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-indigo-400" /></div>
               ) : (
                 idioms.map((idm, idx) => (
-                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-                    <p className="font-serif text-lg text-gray-900 mb-1 font-bold">"{idm.idiom}"</p>
+                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm relative group">
+                    <div className="flex justify-between items-start mb-1">
+                      <p className="font-serif text-lg text-gray-900 font-bold pr-8">"{idm.idiom}"</p>
+                      <button 
+                        onClick={() => handlePlayAudio(`idiom-${idx}`, `${idm.idiom}. ${idm.meaning}`)}
+                        disabled={playingId !== null}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                      >
+                        {playingId === `idiom-${idx}` ? <Loader2 className="w-5 h-5 animate-spin text-indigo-600" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                    </div>
                     <p className="text-sm text-gray-700 mb-2">{idm.meaning}</p>
                     <p className="text-sm text-indigo-600 italic bg-indigo-50/50 p-2 rounded-lg">e.g., {idm.example}</p>
                   </div>
@@ -133,8 +159,17 @@ export default function StudySheet({ isOpen, onClose }: StudySheetProps) {
                 <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-indigo-400" /></div>
               ) : (
                 sentences.map((sen, idx) => (
-                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-                    <p className="font-medium text-lg text-gray-900 mb-2">"{sen.sentence}"</p>
+                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm relative group">
+                    <div className="flex justify-between items-start mb-2">
+                      <p className="font-medium text-lg text-gray-900 pr-8">"{sen.sentence}"</p>
+                      <button 
+                        onClick={() => handlePlayAudio(`sentence-${idx}`, sen.sentence)}
+                        disabled={playingId !== null}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                      >
+                        {playingId === `sentence-${idx}` ? <Loader2 className="w-5 h-5 animate-spin text-indigo-600" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                    </div>
                     <p className="text-sm text-gray-600 mb-1"><span className="font-semibold text-gray-700">Context:</span> {sen.context}</p>
                     <p className="text-sm text-emerald-700 bg-emerald-50 p-2 rounded-lg mt-2"><span className="font-semibold">Meaning:</span> {sen.meaning}</p>
                   </div>
@@ -154,8 +189,17 @@ export default function StudySheet({ isOpen, onClose }: StudySheetProps) {
                 <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-indigo-400" /></div>
               ) : (
                 grammars.map((gram, idx) => (
-                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
-                    <p className="font-bold text-lg text-gray-900 mb-2">{gram.rule}</p>
+                  <div key={idx} className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm relative group">
+                    <div className="flex justify-between items-start mb-2">
+                      <p className="font-bold text-lg text-gray-900 pr-8">{gram.rule}</p>
+                      <button 
+                        onClick={() => handlePlayAudio(`grammar-${idx}`, `${gram.rule}. Example: ${gram.example}`)}
+                        disabled={playingId !== null}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                      >
+                        {playingId === `grammar-${idx}` ? <Loader2 className="w-5 h-5 animate-spin text-indigo-600" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                    </div>
                     <p className="text-sm text-gray-700 mb-3">{gram.explanation}</p>
                     <p className="text-sm text-blue-700 bg-blue-50 p-2 rounded-lg"><span className="font-semibold">Example:</span> {gram.example}</p>
                   </div>
