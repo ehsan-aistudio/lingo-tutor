@@ -6,6 +6,25 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const apiCache = new Map<string, any>();
 const pendingRequests = new Map<string, Promise<any>>();
 
+const getHistory = (key: string): string[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = localStorage.getItem(`history_${key}`);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+};
+
+const addToHistory = (key: string, items: string[]) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const history = getHistory(key);
+    const newHistory = [...new Set([...history, ...items])].slice(-50); // Keep last 50
+    localStorage.setItem(`history_${key}`, JSON.stringify(newHistory));
+  } catch {}
+};
+
 const fetchWithCache = async <T>(key: string, fetcher: () => Promise<T>, forceRefresh: boolean = false): Promise<T> => {
   if (!forceRefresh && apiCache.has(key)) {
     return apiCache.get(key);
@@ -30,10 +49,14 @@ const fetchWithCache = async <T>(key: string, fetcher: () => Promise<T>, forceRe
 
 export const getUsefulIdioms = async (forceRefresh: boolean = false) => {
   return fetchWithCache('idioms', async () => {
+    const history = getHistory('idioms');
+    const historyPrompt = history.length > 0 ? `\n\nDo NOT include any of these idioms you have already generated: ${history.join(', ')}.` : '';
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: 'Provide a list of 5 useful English idioms for an intermediate learner. Return JSON with an array of objects, each containing "idiom", "meaning", and "examples" (an array of 3 distinct example sentences).',
+      contents: `Provide a list of 5 random, highly useful English idioms for an intermediate learner. Do not use the most common ones (like "piece of cake" or "break a leg"). Ensure variety. Random seed: ${Math.random()}.${historyPrompt} Return JSON with an array of objects, each containing "idiom", "meaning", and "examples" (an array of 3 distinct example sentences).`,
       config: {
+        temperature: 1.5,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -52,7 +75,9 @@ export const getUsefulIdioms = async (forceRefresh: boolean = false) => {
         },
       },
     });
-    return JSON.parse(response.text || '[]');
+    const data = JSON.parse(response.text || '[]');
+    addToHistory('idioms', data.map((item: any) => item.idiom));
+    return data;
   }, forceRefresh);
 };
 
@@ -94,10 +119,14 @@ export const createChatSession = (systemInstruction: string) => {
 
 export const getUsefulSentences = async (forceRefresh: boolean = false) => {
   return fetchWithCache('sentences', async () => {
+    const history = getHistory('sentences');
+    const historyPrompt = history.length > 0 ? `\n\nDo NOT include any of these sentences you have already generated: ${history.join(' | ')}.` : '';
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: 'Provide a list of 5 useful English sentences for everyday conversation for an intermediate learner. Return JSON with an array of objects, each containing "sentence", "context" (when to use it), and "meaning".',
+      contents: `Provide a list of 5 random, highly useful English sentences for everyday conversation for an intermediate learner. Focus on different everyday scenarios. Ensure variety. Random seed: ${Math.random()}.${historyPrompt} Return JSON with an array of objects, each containing "sentence", "context" (when to use it), and "meaning".`,
       config: {
+        temperature: 1.5,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -113,16 +142,22 @@ export const getUsefulSentences = async (forceRefresh: boolean = false) => {
         },
       },
     });
-    return JSON.parse(response.text || '[]');
+    const data = JSON.parse(response.text || '[]');
+    addToHistory('sentences', data.map((item: any) => item.sentence));
+    return data;
   }, forceRefresh);
 };
 
 export const getUsefulGrammar = async (forceRefresh: boolean = false) => {
   return fetchWithCache('grammar_topics', async () => {
+    const history = getHistory('grammar');
+    const historyPrompt = history.length > 0 ? `\n\nDo NOT include any of these grammar rules/topics you have already generated: ${history.join(', ')}.` : '';
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: 'Provide a list of 8 useful English grammar rules or topics for an intermediate learner. Return JSON with an array of objects, each containing "rule" (the name of the rule/topic) and "shortDescription" (a very brief 1-sentence summary).',
+      contents: `Provide a list of 8 random, useful English grammar rules or topics for an intermediate learner. Pick a diverse mix of tenses, prepositions, conditionals, etc. Ensure variety. Random seed: ${Math.random()}.${historyPrompt} Return JSON with an array of objects, each containing "rule" (the name of the rule/topic) and "shortDescription" (a very brief 1-sentence summary).`,
       config: {
+        temperature: 1.5,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -137,7 +172,9 @@ export const getUsefulGrammar = async (forceRefresh: boolean = false) => {
         },
       },
     });
-    return JSON.parse(response.text || '[]');
+    const data = JSON.parse(response.text || '[]');
+    addToHistory('grammar', data.map((item: any) => item.rule));
+    return data;
   }, forceRefresh);
 };
 
@@ -187,10 +224,14 @@ Return JSON with the following structure:
 
 export const getNewRoleplays = async (forceRefresh: boolean = false) => {
   return fetchWithCache('roleplays', async () => {
+    const history = getHistory('roleplays');
+    const historyPrompt = history.length > 0 ? `\n\nDo NOT include any of these scenarios you have already generated: ${history.join(', ')}.` : '';
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: 'Provide a list of 3 unique, everyday English roleplay scenarios for an intermediate learner. Return JSON with an array of objects, each containing "title" (short name), "emoji" (a fitting emoji), and "category" (e.g., "Travel", "Professional", "Everyday Life", "Socializing").',
+      contents: `Provide a list of 3 unique, random everyday English roleplay scenarios for an intermediate learner. Ensure variety. Random seed: ${Math.random()}.${historyPrompt} Return JSON with an array of objects, each containing "title" (short name), "emoji" (a fitting emoji), and "category" (e.g., "Travel", "Professional", "Everyday Life", "Socializing").`,
       config: {
+        temperature: 1.5,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -206,7 +247,9 @@ export const getNewRoleplays = async (forceRefresh: boolean = false) => {
         },
       },
     });
-    return JSON.parse(response.text || '[]');
+    const data = JSON.parse(response.text || '[]');
+    addToHistory('roleplays', data.map((item: any) => item.title));
+    return data;
   }, forceRefresh);
 };
 
